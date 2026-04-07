@@ -76,67 +76,7 @@
         "azPowerShellVersion": "11.0",
         "retentionInterval": "PT1H",
         "timeout": "PT10M",
-        "scriptContent": "
-          $ErrorActionPreference = 'Stop'
-
-          # Running as the deploying user — no explicit login needed,
-          # the Deployment Script container inherits the caller's token.
-          $tenantId = (Get-AzContext).Tenant.Id
-
-          # Install Microsoft.Graph module
-          Install-Module -Name Microsoft.Graph.Applications -Force -Scope CurrentUser -AllowClobber | Out-Null
-          Import-Module Microsoft.Graph.Applications
-
-          # Get access token for Microsoft Graph
-          $token = (Get-AzAccessToken -ResourceUrl 'https://graph.microsoft.com').Token
-          Connect-MgGraph -AccessToken ($token | ConvertTo-SecureString -AsPlainText -Force) | Out-Null
-
-          # Domains.Read.All application permission on Microsoft Graph
-          # App ID of Microsoft Graph: 00000003-0000-0000-c000-000000000000
-          # Domains.Read.All role ID: 0b5d694c-a244-4bde-86e6-eb5cd07730fe
-          $graphAppId = '00000003-0000-0000-c000-000000000000'
-          $domainsReadAllId = '0b5d694c-a244-4bde-86e6-eb5cd07730fe'
-
-          # Create the App Registration
-          $appName = $Env:APP_REGISTRATION_NAME
-          $redirectUri = $Env:REDIRECT_URI
-
-          $app = New-MgApplication -DisplayName $appName `
-            -SignInAudience 'AzureADMyOrg' `
-            -Web @{ RedirectUris = @($redirectUri) } `
-            -RequiredResourceAccess @(
-              @{
-                ResourceAppId = $graphAppId
-                ResourceAccess = @(
-                  @{
-                    Id   = $domainsReadAllId
-                    Type = 'Role'
-                  }
-                )
-              }
-            )
-
-          $clientId = $app.AppId
-          $objectId = $app.Id
-
-          # Create a client secret (1 year expiry)
-          $secret = Add-MgApplicationPassword -ApplicationId $objectId -PasswordCredential @{
-            DisplayName = 'ARM-generated secret'
-            EndDateTime  = (Get-Date).AddYears(1)
-          }
-          $clientSecret = $secret.SecretText
-
-          # Build the admin consent URL
-          $consentUrl = \"https://login.microsoftonline.com/$tenantId/adminconsent?client_id=$clientId&redirect_uri=$([System.Uri]::EscapeDataString($redirectUri))&state=consent\"
-
-          # Output
-          $DeploymentScriptOutputs = @{}
-          $DeploymentScriptOutputs['clientId']     = $clientId
-          $DeploymentScriptOutputs['tenantId']     = $tenantId
-          $DeploymentScriptOutputs['objectId']     = $objectId
-          $DeploymentScriptOutputs['consentUrl']   = $consentUrl
-          $DeploymentScriptOutputs['clientSecret'] = $clientSecret
-        ",
+        "scriptContent": "$ErrorActionPreference = 'Stop'\n$tenantId = (Get-AzContext).Tenant.Id\nInstall-Module -Name Microsoft.Graph.Applications -Force -Scope CurrentUser -AllowClobber | Out-Null\nImport-Module Microsoft.Graph.Applications\n$token = (Get-AzAccessToken -ResourceUrl 'https://graph.microsoft.com').Token\nConnect-MgGraph -AccessToken ($token | ConvertTo-SecureString -AsPlainText -Force) | Out-Null\n$graphAppId = '00000003-0000-0000-c000-000000000000'\n$domainsReadAllId = '0b5d694c-a244-4bde-86e6-eb5cd07730fe'\n$appName = $Env:APP_REGISTRATION_NAME\n$redirectUri = $Env:REDIRECT_URI\n$app = New-MgApplication -DisplayName $appName -SignInAudience 'AzureADMyOrg' -Web @{ RedirectUris = @($redirectUri) } -RequiredResourceAccess @(@{ ResourceAppId = $graphAppId; ResourceAccess = @(@{ Id = $domainsReadAllId; Type = 'Role' }) })\n$clientId = $app.AppId\n$objectId = $app.Id\n$secret = Add-MgApplicationPassword -ApplicationId $objectId -PasswordCredential @{ DisplayName = 'ARM-generated secret'; EndDateTime = (Get-Date).AddYears(1) }\n$clientSecret = $secret.SecretText\n$encodedRedirect = [System.Uri]::EscapeDataString($redirectUri)\n$consentUrl = \"https://login.microsoftonline.com/$tenantId/adminconsent?client_id=$clientId&redirect_uri=$encodedRedirect&state=consent\"\n$DeploymentScriptOutputs = @{}\n$DeploymentScriptOutputs['clientId'] = $clientId\n$DeploymentScriptOutputs['tenantId'] = $tenantId\n$DeploymentScriptOutputs['objectId'] = $objectId\n$DeploymentScriptOutputs['consentUrl'] = $consentUrl\n$DeploymentScriptOutputs['clientSecret'] = $clientSecret",
         "environmentVariables": [
           {
             "name": "APP_REGISTRATION_NAME",
@@ -221,7 +161,6 @@
               "value": "[subscription().subscriptionId]"
             }
           ],
-          "netFrameworkVersion": "v8.0",
           "pythonVersion": "3.11"
         },
         "httpsOnly": true
