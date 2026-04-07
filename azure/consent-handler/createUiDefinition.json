@@ -1,0 +1,138 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
+  "handler": "Microsoft.Azure.CreateUIDef",
+  "version": "0.1.2-preview",
+  "parameters": {
+    "basics": [
+      {
+        "name": "customerSlug",
+        "type": "Microsoft.Common.TextBox",
+        "label": "Customer Slug",
+        "placeholder": "e.g. contoso",
+        "defaultValue": "",
+        "toolTip": "A short lowercase identifier for your customer. Used to name Azure resources. Only letters, numbers, and hyphens allowed.",
+        "constraints": {
+          "required": true,
+          "regex": "^[a-z0-9][a-z0-9-]{1,22}[a-z0-9]$",
+          "validationMessage": "Must be 3-24 characters, lowercase letters, numbers, and hyphens only. Cannot start or end with a hyphen."
+        },
+        "visible": true
+      }
+    ],
+    "steps": [
+      {
+        "name": "appRegistration",
+        "label": "App Registration",
+        "elements": [
+          {
+            "name": "infoBox",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": true,
+            "options": {
+              "icon": "Info",
+              "text": "This step creates an App Registration in your Azure AD tenant with the 'Domains.Read.All' application permission. An admin consent URL will be generated at the end of deployment — an admin must visit it to activate the permission."
+            }
+          },
+          {
+            "name": "appRegistrationName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "App Registration Display Name",
+            "defaultValue": "[concat('domain-scanner-', basics('customerSlug'))]",
+            "toolTip": "The display name of the App Registration that will be created in your Azure AD.",
+            "constraints": {
+              "required": true
+            },
+            "visible": true
+          }
+        ]
+      },
+      {
+        "name": "externalApi",
+        "label": "External API (Optional)",
+        "elements": [
+          {
+            "name": "infoBox",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": true,
+            "options": {
+              "icon": "Info",
+              "text": "Optionally provide an external API URL. After the admin completes consent, the Function App will POST the App Registration credentials (tenantId, clientId, clientSecret) to this URL. Leave blank to skip — credentials will still be visible in the deployment outputs and Function App settings."
+            }
+          },
+          {
+            "name": "externalCallbackApiUrl",
+            "type": "Microsoft.Common.TextBox",
+            "label": "External API URL",
+            "placeholder": "https://your-api.example.com/webhook/azure-consent",
+            "defaultValue": "",
+            "toolTip": "Your API endpoint that will receive a POST with { tenantId, clientId, clientSecret, customerSlug } after consent is granted.",
+            "constraints": {
+              "required": false,
+              "regex": "^(https?://.*)?$",
+              "validationMessage": "Must be a valid HTTP/HTTPS URL or left empty."
+            },
+            "visible": true
+          }
+        ]
+      },
+      {
+        "name": "summary",
+        "label": "Summary",
+        "elements": [
+          {
+            "name": "summaryInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": true,
+            "options": {
+              "icon": "Info",
+              "text": "Review the deployment summary below. After deployment completes, check the 'Outputs' tab for the admin consent URL. Share that URL with a Global Administrator of the target tenant to activate the Domains.Read.All permission."
+            }
+          },
+          {
+            "name": "reviewCustomerSlug",
+            "type": "Microsoft.Common.TextBlock",
+            "visible": true,
+            "options": {
+              "text": "[concat('Customer slug: ', basics('customerSlug'))]",
+              "link": {
+                "label": "",
+                "uri": ""
+              }
+            }
+          },
+          {
+            "name": "reviewAppName",
+            "type": "Microsoft.Common.TextBlock",
+            "visible": true,
+            "options": {
+              "text": "[concat('App Registration name: ', steps('appRegistration').appRegistrationName)]"
+            }
+          },
+          {
+            "name": "reviewApiUrl",
+            "type": "Microsoft.Common.TextBlock",
+            "visible": "[not(empty(steps('externalApi').externalCallbackApiUrl))]",
+            "options": {
+              "text": "[concat('Credentials will be POSTed to: ', steps('externalApi').externalCallbackApiUrl)]"
+            }
+          },
+          {
+            "name": "warningBox",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": true,
+            "options": {
+              "icon": "Warning",
+              "text": "This deployment will create an App Registration in your Azure Active Directory. A Global Administrator must grant admin consent after deployment. The temporary Function App that handles the consent callback will self-delete after credentials are delivered."
+            }
+          }
+        ]
+      }
+    ],
+    "outputs": {
+      "customerSlug": "[basics('customerSlug')]",
+      "appRegistrationName": "[steps('appRegistration').appRegistrationName]",
+      "externalCallbackApiUrl": "[steps('externalApi').externalCallbackApiUrl]",
+      "location": "[location()]"
+    }
+  }
+}
