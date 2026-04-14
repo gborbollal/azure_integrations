@@ -60,6 +60,11 @@ $clientId = $app.AppId
 $objectId = $app.Id
 Write-Host "App Registration created (clientId: $clientId)" -ForegroundColor Green
 
+# --- Create Service Principal (required for admin consent to work) ---
+Write-Host "Creating Service Principal..." -ForegroundColor Gray
+$sp = New-MgServicePrincipal -AppId $clientId
+Write-Host "Service Principal created (objectId: $($sp.Id))" -ForegroundColor Green
+
 # --- Create client secret ---
 Write-Host "Creating client secret..." -ForegroundColor Gray
 $secret = Add-MgApplicationPassword -ApplicationId $objectId -PasswordCredential @{
