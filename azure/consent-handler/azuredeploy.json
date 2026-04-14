@@ -7,7 +7,7 @@
       "minLength": 2,
       "maxLength": 24,
       "metadata": {
-        "description": "A short identifier for your customer (lowercase, no spaces). Used to name Azure resources."
+        "description": "A short identifier for your customer (lowercase, no spaces)."
       }
     },
     "location": {
@@ -21,33 +21,79 @@
       "type": "string",
       "defaultValue": "[concat('domain-scanner-', parameters('customerSlug'))]",
       "metadata": {
-        "description": "Display name for the App Registration that will be created."
+        "description": "Display name for the App Registration."
       }
     },
     "externalCallbackApiUrl": {
       "type": "string",
       "defaultValue": "",
       "metadata": {
-        "description": "(Optional) External API URL to POST credentials to. Leave empty to skip."
+        "description": "(Optional) External API URL to POST credentials to."
       }
     }
   },
   "variables": {
     "deploymentScriptName": "[concat('ds-appreg-', parameters('customerSlug'))]",
-    "consentRedirectUri": "https://portal.azure.com"
+    "managedIdentityName": "[concat('mi-appreg-', parameters('customerSlug'))]",
+    "storageAccountName": "[take(concat('st', replace(parameters('customerSlug'), '-', ''), uniqueString(resourceGroup().id)), 24)]",
+    "consentRedirectUri": "https://portal.azure.com",
+    "contributorRoleId": "b24988ac-6180-42a0-ab88-20f7382dd24c"
   },
   "resources": [
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-01-01",
+      "name": "[variables('storageAccountName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "kind": "StorageV2"
+    },
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[variables('managedIdentityName')]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceGroup().id, variables('managedIdentityName'), variables('contributorRoleId'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('contributorRoleId'))]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))).principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
     {
       "type": "Microsoft.Resources/deploymentScripts",
       "apiVersion": "2023-08-01",
       "name": "[variables('deploymentScriptName')]",
       "location": "[parameters('location')]",
       "kind": "AzurePowerShell",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]": {}
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
+        "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, variables('managedIdentityName'), variables('contributorRoleId')))]"
+      ],
       "properties": {
         "azPowerShellVersion": "11.0",
         "retentionInterval": "PT1H",
-        "timeout": "PT10M",
-        "scriptContent": "$ErrorActionPreference = 'Stop'\n$tenantId = (Get-AzContext).Tenant.Id\nInstall-Module -Name Microsoft.Graph.Applications -Force -Scope CurrentUser -AllowClobber | Out-Null\nImport-Module Microsoft.Graph.Applications\n$token = (Get-AzAccessToken -ResourceUrl 'https://graph.microsoft.com' -AsSecureString).Token\nConnect-MgGraph -AccessToken $token | Out-Null\n$graphAppId = '00000003-0000-0000-c000-000000000000'\n$domainsReadAllId = '0b5d694c-a244-4bde-86e6-eb5cd07730fe'\n$appName = $Env:APP_REGISTRATION_NAME\n$customerSlug = $Env:CUSTOMER_SLUG\n$externalApiUrl = $Env:EXTERNAL_API_URL\n$redirectUri = $Env:REDIRECT_URI\n$app = New-MgApplication -DisplayName $appName -SignInAudience 'AzureADMyOrg' -Web @{ RedirectUris = @($redirectUri) } -RequiredResourceAccess @(@{ ResourceAppId = $graphAppId; ResourceAccess = @(@{ Id = $domainsReadAllId; Type = 'Role' }) })\n$clientId = $app.AppId\n$objectId = $app.Id\n$secret = Add-MgApplicationPassword -ApplicationId $objectId -PasswordCredential @{ DisplayName = 'ARM-generated secret'; EndDateTime = (Get-Date).AddYears(1) }\n$clientSecret = $secret.SecretText\n$consentUrl = 'https://login.microsoftonline.com/' + $tenantId + '/adminconsent?client_id=' + $clientId + '&redirect_uri=' + [System.Uri]::EscapeDataString($redirectUri) + '&state=consent'\nif ($externalApiUrl -ne '') {\n  $body = @{ tenantId = $tenantId; clientId = $clientId; clientSecret = $clientSecret; customerSlug = $customerSlug } | ConvertTo-Json\n  try {\n    Invoke-RestMethod -Uri $externalApiUrl -Method Post -Body $body -ContentType 'application/json' | Out-Null\n    Write-Output 'Successfully posted credentials to external API'\n  } catch {\n    Write-Warning ('Failed to POST to external API: ' + $_.Exception.Message)\n  }\n}\n$DeploymentScriptOutputs = @{}\n$DeploymentScriptOutputs['clientId'] = $clientId\n$DeploymentScriptOutputs['tenantId'] = $tenantId\n$DeploymentScriptOutputs['objectId'] = $objectId\n$DeploymentScriptOutputs['consentUrl'] = $consentUrl\n$DeploymentScriptOutputs['clientSecret'] = $clientSecret\n",
+        "timeout": "PT15M",
+        "storageAccountSettings": {
+          "storageAccountName": "[variables('storageAccountName')]",
+          "storageAccountKey": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-01-01').keys[0].value]"
+        },
+        "scriptContent": "$ErrorActionPreference = 'Stop'\n# Get token via managed identity endpoint (no Connect-AzAccount needed)\n$resource = 'https://graph.microsoft.com'\n$endpoint = $Env:IDENTITY_ENDPOINT\n$header = $Env:IDENTITY_HEADER\n$tokenUrl = $endpoint + '?resource=' + $resource + '&api-version=2019-08-01'\n$tokenResponse = Invoke-RestMethod -Uri $tokenUrl -Headers @{ X-IDENTITY-HEADER = $header } -Method Get\n$graphToken = $tokenResponse.access_token\n# Also get ARM token to read tenantId\n$armUrl = $endpoint + '?resource=https://management.azure.com/&api-version=2019-08-01'\n$armResponse = Invoke-RestMethod -Uri $armUrl -Headers @{ X-IDENTITY-HEADER = $header } -Method Get\n$armToken = $armResponse.access_token\n$armPayload = $armToken.Split('.')[1]\n$padded = $armPayload.PadRight($armPayload.Length + (4 - $armPayload.Length % 4) % 4, '=')\n$tenantId = (ConvertFrom-Json ([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($padded)))).tid\n# Connect to Graph with the MI token\nInstall-Module -Name Microsoft.Graph.Applications -Force -Scope CurrentUser -AllowClobber | Out-Null\nImport-Module Microsoft.Graph.Applications\n$secureToken = ConvertTo-SecureString $graphToken -AsPlainText -Force\nConnect-MgGraph -AccessToken $secureToken | Out-Null\n# Create App Registration\n$graphAppId = '00000003-0000-0000-c000-000000000000'\n$domainsReadAllId = '0b5d694c-a244-4bde-86e6-eb5cd07730fe'\n$appName = $Env:APP_REGISTRATION_NAME\n$customerSlug = $Env:CUSTOMER_SLUG\n$externalApiUrl = $Env:EXTERNAL_API_URL\n$redirectUri = $Env:REDIRECT_URI\n$app = New-MgApplication -DisplayName $appName -SignInAudience 'AzureADMyOrg' -Web @{ RedirectUris = @($redirectUri) } -RequiredResourceAccess @(@{ ResourceAppId = $graphAppId; ResourceAccess = @(@{ Id = $domainsReadAllId; Type = 'Role' }) })\n$clientId = $app.AppId\n$objectId = $app.Id\n$secret = Add-MgApplicationPassword -ApplicationId $objectId -PasswordCredential @{ DisplayName = 'ARM-generated secret'; EndDateTime = (Get-Date).AddYears(1) }\n$clientSecret = $secret.SecretText\n$consentUrl = 'https://login.microsoftonline.com/' + $tenantId + '/adminconsent?client_id=' + $clientId + '&redirect_uri=' + [System.Uri]::EscapeDataString($redirectUri) + '&state=consent'\n# POST to external API if configured\nif ($externalApiUrl -ne '') {\n  $body = @{ tenantId = $tenantId; clientId = $clientId; clientSecret = $clientSecret; customerSlug = $customerSlug } | ConvertTo-Json\n  try {\n    Invoke-RestMethod -Uri $externalApiUrl -Method Post -Body $body -ContentType 'application/json' | Out-Null\n    Write-Output 'Successfully posted credentials to external API'\n  } catch {\n    Write-Warning ('Failed to POST to external API: ' + $_.Exception.Message)\n  }\n}\n# Outputs\n$DeploymentScriptOutputs = @{}\n$DeploymentScriptOutputs['clientId'] = $clientId\n$DeploymentScriptOutputs['tenantId'] = $tenantId\n$DeploymentScriptOutputs['objectId'] = $objectId\n$DeploymentScriptOutputs['consentUrl'] = $consentUrl\n$DeploymentScriptOutputs['clientSecret'] = $clientSecret\n",
         "environmentVariables": [
           {
             "name": "APP_REGISTRATION_NAME",
@@ -84,7 +130,7 @@
     },
     "note": {
       "type": "string",
-      "value": "Visit the consentUrl output above as a Global Administrator to grant the Domains.Read.All permission."
+      "value": "Visit the consentUrl output as a Global Administrator to grant Domains.Read.All permission."
     }
   }
 }
