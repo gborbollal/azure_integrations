@@ -33,11 +33,10 @@
     }
   },
   "variables": {
-    "functionAppName": "[concat('consent-handler-', parameters('customerSlug'))]",
     "storageAccountName": "[concat('st', replace(parameters('customerSlug'), '-', ''), uniqueString(resourceGroup().id))]",
-    "hostingPlanName": "[concat('asp-consent-', parameters('customerSlug'))]",
     "deploymentScriptName": "[concat('ds-appreg-', parameters('customerSlug'))]",
-    "storageAccountNameShort": "[take(variables('storageAccountName'), 24)]"
+    "storageAccountNameShort": "[take(variables('storageAccountName'), 24)]",
+    "consentRedirectUri": "https://portal.azure.com"
   },
   "resources": [
     {
@@ -49,19 +48,6 @@
         "name": "Standard_LRS"
       },
       "kind": "StorageV2"
-    },
-    {
-      "type": "Microsoft.Web/serverfarms",
-      "apiVersion": "2023-01-01",
-      "name": "[variables('hostingPlanName')]",
-      "location": "[parameters('location')]",
-      "sku": {
-        "name": "Y1",
-        "tier": "Dynamic"
-      },
-      "properties": {
-        "reserved": true
-      }
     },
     {
       "type": "Microsoft.Resources/deploymentScripts",
@@ -80,95 +66,25 @@
           "storageAccountName": "[variables('storageAccountNameShort')]",
           "storageAccountKey": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountNameShort')), '2023-01-01').keys[0].value]"
         },
-        "scriptContent": "$ErrorActionPreference = 'Stop'\n$tenantId = (Get-AzContext).Tenant.Id\nInstall-Module -Name Microsoft.Graph.Applications -Force -Scope CurrentUser -AllowClobber | Out-Null\nImport-Module Microsoft.Graph.Applications\n$token = (Get-AzAccessToken -ResourceUrl 'https://graph.microsoft.com').Token\nConnect-MgGraph -AccessToken ($token | ConvertTo-SecureString -AsPlainText -Force) | Out-Null\n$graphAppId = '00000003-0000-0000-c000-000000000000'\n$domainsReadAllId = '0b5d694c-a244-4bde-86e6-eb5cd07730fe'\n$appName = $Env:APP_REGISTRATION_NAME\n$redirectUri = $Env:REDIRECT_URI\n$app = New-MgApplication -DisplayName $appName -SignInAudience 'AzureADMyOrg' -Web @{ RedirectUris = @($redirectUri) } -RequiredResourceAccess @(@{ ResourceAppId = $graphAppId; ResourceAccess = @(@{ Id = $domainsReadAllId; Type = 'Role' }) })\n$clientId = $app.AppId\n$objectId = $app.Id\n$secret = Add-MgApplicationPassword -ApplicationId $objectId -PasswordCredential @{ DisplayName = 'ARM-generated secret'; EndDateTime = (Get-Date).AddYears(1) }\n$clientSecret = $secret.SecretText\n$consentUrl = 'https://login.microsoftonline.com/' + $tenantId + '/adminconsent?client_id=' + $clientId + '&redirect_uri=' + [System.Uri]::EscapeDataString($redirectUri) + '&state=consent'\n$DeploymentScriptOutputs = @{}\n$DeploymentScriptOutputs['clientId'] = $clientId\n$DeploymentScriptOutputs['tenantId'] = $tenantId\n$DeploymentScriptOutputs['objectId'] = $objectId\n$DeploymentScriptOutputs['consentUrl'] = $consentUrl\n$DeploymentScriptOutputs['clientSecret'] = $clientSecret\n",
+        "scriptContent": "$ErrorActionPreference = 'Stop'\n$tenantId = (Get-AzContext).Tenant.Id\nInstall-Module -Name Microsoft.Graph.Applications -Force -Scope CurrentUser -AllowClobber | Out-Null\nImport-Module Microsoft.Graph.Applications\n$token = (Get-AzAccessToken -ResourceUrl 'https://graph.microsoft.com').Token\nConnect-MgGraph -AccessToken ($token | ConvertTo-SecureString -AsPlainText -Force) | Out-Null\n$graphAppId = '00000003-0000-0000-c000-000000000000'\n$domainsReadAllId = '0b5d694c-a244-4bde-86e6-eb5cd07730fe'\n$appName = $Env:APP_REGISTRATION_NAME\n$customerSlug = $Env:CUSTOMER_SLUG\n$externalApiUrl = $Env:EXTERNAL_API_URL\n$redirectUri = $Env:REDIRECT_URI\n$app = New-MgApplication -DisplayName $appName -SignInAudience 'AzureADMyOrg' -Web @{ RedirectUris = @($redirectUri) } -RequiredResourceAccess @(@{ ResourceAppId = $graphAppId; ResourceAccess = @(@{ Id = $domainsReadAllId; Type = 'Role' }) })\n$clientId = $app.AppId\n$objectId = $app.Id\n$secret = Add-MgApplicationPassword -ApplicationId $objectId -PasswordCredential @{ DisplayName = 'ARM-generated secret'; EndDateTime = (Get-Date).AddYears(1) }\n$clientSecret = $secret.SecretText\n$consentUrl = 'https://login.microsoftonline.com/' + $tenantId + '/adminconsent?client_id=' + $clientId + '&redirect_uri=' + [System.Uri]::EscapeDataString($redirectUri) + '&state=consent'\nif ($externalApiUrl -ne '') {\n  $body = @{ tenantId = $tenantId; clientId = $clientId; clientSecret = $clientSecret; customerSlug = $customerSlug } | ConvertTo-Json\n  try {\n    Invoke-RestMethod -Uri $externalApiUrl -Method Post -Body $body -ContentType 'application/json' | Out-Null\n    Write-Output 'Successfully posted credentials to external API'\n  } catch {\n    Write-Warning ('Failed to POST to external API: ' + $_.Exception.Message)\n  }\n}\n$DeploymentScriptOutputs = @{}\n$DeploymentScriptOutputs['clientId'] = $clientId\n$DeploymentScriptOutputs['tenantId'] = $tenantId\n$DeploymentScriptOutputs['objectId'] = $objectId\n$DeploymentScriptOutputs['consentUrl'] = $consentUrl\n$DeploymentScriptOutputs['clientSecret'] = $clientSecret\n",
         "environmentVariables": [
           {
             "name": "APP_REGISTRATION_NAME",
             "value": "[parameters('appRegistrationName')]"
           },
           {
+            "name": "CUSTOMER_SLUG",
+            "value": "[parameters('customerSlug')]"
+          },
+          {
+            "name": "EXTERNAL_API_URL",
+            "value": "[parameters('externalCallbackApiUrl')]"
+          },
+          {
             "name": "REDIRECT_URI",
-            "value": "[concat('https://', variables('functionAppName'), '.azurewebsites.net/api/ConsentHandler')]"
+            "value": "[variables('consentRedirectUri')]"
           }
         ]
-      }
-    },
-    {
-      "type": "Microsoft.Web/sites",
-      "apiVersion": "2023-01-01",
-      "name": "[variables('functionAppName')]",
-      "location": "[parameters('location')]",
-      "kind": "functionapp,linux",
-      "dependsOn": [
-        "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
-        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountNameShort'))]",
-        "[resourceId('Microsoft.Resources/deploymentScripts', variables('deploymentScriptName'))]"
-      ],
-      "properties": {
-        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
-        "reserved": true,
-        "siteConfig": {
-          "linuxFxVersion": "Python|3.11",
-          "appSettings": [
-            {
-              "name": "AzureWebJobsStorage",
-              "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountNameShort'), ';EndpointSuffix=', environment().suffixes.storage, ';AccountKey=', listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountNameShort')), '2023-01-01').keys[0].value)]"
-            },
-            {
-              "name": "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING",
-              "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountNameShort'), ';EndpointSuffix=', environment().suffixes.storage, ';AccountKey=', listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountNameShort')), '2023-01-01').keys[0].value)]"
-            },
-            {
-              "name": "WEBSITE_CONTENTSHARE",
-              "value": "[toLower(variables('functionAppName'))]"
-            },
-            {
-              "name": "FUNCTIONS_EXTENSION_VERSION",
-              "value": "~4"
-            },
-            {
-              "name": "FUNCTIONS_WORKER_RUNTIME",
-              "value": "python"
-            },
-            {
-              "name": "WEBSITE_RUN_FROM_PACKAGE",
-              "value": "https://raw.githubusercontent.com/gborbollal/azure_integrations/main/azure/consent-handler/function.zip"
-            },
-            {
-              "name": "TENANT_ID",
-              "value": "[reference(resourceId('Microsoft.Resources/deploymentScripts', variables('deploymentScriptName'))).outputs.tenantId]"
-            },
-            {
-              "name": "CLIENT_ID",
-              "value": "[reference(resourceId('Microsoft.Resources/deploymentScripts', variables('deploymentScriptName'))).outputs.clientId]"
-            },
-            {
-              "name": "CLIENT_SECRET",
-              "value": "[reference(resourceId('Microsoft.Resources/deploymentScripts', variables('deploymentScriptName'))).outputs.clientSecret]"
-            },
-            {
-              "name": "CUSTOMER_SLUG",
-              "value": "[parameters('customerSlug')]"
-            },
-            {
-              "name": "EXTERNAL_API_URL",
-              "value": "[parameters('externalCallbackApiUrl')]"
-            },
-            {
-              "name": "FUNCTION_APP_NAME",
-              "value": "[variables('functionAppName')]"
-            },
-            {
-              "name": "RESOURCE_GROUP_NAME",
-              "value": "[resourceGroup().name]"
-            },
-            {
-              "name": "SUBSCRIPTION_ID",
-              "value": "[subscription().subscriptionId]"
-            }
-          ]
-        },
-        "httpsOnly": true
       }
     }
   ],
@@ -185,13 +101,9 @@
       "type": "string",
       "value": "[reference(resourceId('Microsoft.Resources/deploymentScripts', variables('deploymentScriptName'))).outputs.tenantId]"
     },
-    "functionAppUrl": {
-      "type": "string",
-      "value": "[concat('https://', variables('functionAppName'), '.azurewebsites.net')]"
-    },
     "note": {
       "type": "string",
-      "value": "The clientSecret is stored in the Function App settings (CLIENT_SECRET). Retrieve it from the Azure Portal > Function App > Configuration, or POST it to your external API via EXTERNAL_API_URL."
+      "value": "Visit the consentUrl output above as a Global Administrator to grant the Domains.Read.All permission. The clientSecret has been sent to your external API (if configured)."
     }
   }
 }
