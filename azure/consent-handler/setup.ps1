@@ -41,13 +41,11 @@ Write-Host "Connected to Microsoft Graph" -ForegroundColor Green
 Write-Host "Creating App Registration '$appName'..." -ForegroundColor Gray
 
 $graphAppId     = '00000003-0000-0000-c000-000000000000'
-$domainsReadAllId = '0b5d694c-a244-4bde-86e6-eb5cd07730fe'
-$redirectUri    = 'https://portal.azure.com'
+$domainsReadAllId = 'dbb9058a-0e50-45d7-ae91-66909b5d4664'
 
 $app = New-MgApplication `
     -DisplayName $appName `
     -SignInAudience 'AzureADMyOrg' `
-    -Web @{ RedirectUris = @($redirectUri) } `
     -RequiredResourceAccess @(@{
         ResourceAppId  = $graphAppId
         ResourceAccess = @(@{
@@ -74,8 +72,15 @@ $secret = Add-MgApplicationPassword -ApplicationId $objectId -PasswordCredential
 $clientSecret = $secret.SecretText
 Write-Host "Client secret created" -ForegroundColor Green
 
-# --- Build consent URL ---
-$consentUrl = 'https://login.microsoftonline.com/' + $tenantId + '/adminconsent?client_id=' + $clientId + '&redirect_uri=' + [System.Uri]::EscapeDataString($redirectUri) + '&state=consent'
+# --- Grant admin consent directly (script runs as Global Admin already) ---
+Write-Host "Granting admin consent for Domains.Read.All..." -ForegroundColor Gray
+$graphSp = Get-MgServicePrincipal -Filter "appId eq '00000003-0000-0000-c000-000000000000'"
+New-MgServicePrincipalAppRoleAssignment `
+    -ServicePrincipalId $sp.Id `
+    -PrincipalId $sp.Id `
+    -ResourceId $graphSp.Id `
+    -AppRoleId $domainsReadAllId | Out-Null
+Write-Host "Admin consent granted for Domains.Read.All" -ForegroundColor Green
 
 # --- POST to external API if configured ---
 if (-not [string]::IsNullOrWhiteSpace($externalApiUrl)) {
@@ -106,8 +111,6 @@ Write-Host "Tenant ID:     $tenantId"
 Write-Host "Client ID:     $clientId"
 Write-Host "Client Secret: $clientSecret"
 Write-Host ""
-Write-Host "NEXT STEP — Share this URL with a Global Administrator" -ForegroundColor Yellow
-Write-Host "to grant the Domains.Read.All permission:" -ForegroundColor Yellow
-Write-Host ""
-Write-Host $consentUrl -ForegroundColor Cyan
+Write-Host "Domains.Read.All permission has been granted." -ForegroundColor Green
+Write-Host "No further admin consent steps required." -ForegroundColor Green
 Write-Host ""
